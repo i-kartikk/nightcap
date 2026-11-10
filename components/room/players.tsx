@@ -214,7 +214,7 @@ export const Html5Player = forwardRef<PlayerHandle, { src: string; hls: boolean 
 
   return (
     <div className="relative h-full w-full bg-black">
-      <video ref={video} className="h-full w-full" playsInline controls preload="auto" crossOrigin="anonymous"
+      <video ref={video} className="h-full w-full" playsInline controls preload="auto"
         onLoadedMetadata={() => { setLoading(false); onReady(); }}
         onPlay={onPlay} onPause={onPause} onSeeked={onSeek}
         onWaiting={() => onBuffering?.(true)} onPlaying={() => onBuffering?.(false)}
