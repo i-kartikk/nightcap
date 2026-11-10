@@ -194,7 +194,8 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
             const rx = r as Reaction;
             setReactions((list) => (list.some((x) => x.message_id === rx.message_id && x.user_id === rx.user_id && x.emoji === rx.emoji) ? list : [...list, rx]));
           })
-          .subscribe(async (s) => {
+          .subscribe(async (s, err) => {
+          if (err) console.error('Realtime:', s, err);
             if (s === 'SUBSCRIBED') {
               if (reconnectTimer) clearTimeout(reconnectTimer);
               reconnectTimer = undefined;
