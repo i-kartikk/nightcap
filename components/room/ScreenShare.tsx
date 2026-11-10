@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Room, RoomEvent, Track, AudioPresets, type RemoteTrack } from 'livekit-client';
+import { Room, RoomEvent, Track, AudioPresets, ScreenSharePresets, type RemoteTrack } from 'livekit-client';
 import { Loader2, MonitorUp, MonitorX, Volume2 } from 'lucide-react';
 
 /*
@@ -79,8 +79,10 @@ export function useScreenShare(roomId: string, onError: (msg: string) => void) {
         await room.localParticipant.publishTrack(video, {
           source: Track.Source.ScreenShare,
           videoCodec: 'h264',
-          screenShareEncoding: { maxBitrate: 6_000_000, maxFramerate: 30 },
+          // Up to 8 Mbps for a crisp 1080p picture, plus a 720p layer for viewers on slow connections.
+          screenShareEncoding: { maxBitrate: 8_000_000, maxFramerate: 30 },
           simulcast: true,
+          screenShareSimulcastLayers: [ScreenSharePresets.h720fps30],
         });
       }
       const audio = stream.getAudioTracks()[0];
@@ -146,7 +148,8 @@ export function ScreenViewer({ roomId, sharerName }: { roomId: string; sharerNam
 
   useEffect(() => {
     let alive = true;
-    const room = new Room({ adaptiveStream: true, dynacast: true });
+    // Pick the stream layer for the real screen resolution (sharper on phones and Retina displays).
+    const room = new Room({ adaptiveStream: { pixelDensity: 'screen' }, dynacast: true });
     roomRef.current = room;
 
     const attach = (track: RemoteTrack) => {
@@ -174,7 +177,7 @@ export function ScreenViewer({ roomId, sharerName }: { roomId: string; sharerNam
 
   return (
     <div className="absolute inset-0 z-10 flex items-center justify-center bg-black">
-      <video ref={videoRef} className="h-full w-full object-contain" autoPlay playsInline muted />
+      <video ref={videoRef} data-screen-share className="h-full w-full object-contain" autoPlay playsInline muted />
       <audio ref={audioRef} autoPlay />
       {!hasVideo && !error && (
         <span className="absolute flex items-center gap-2 text-sm text-white/70"><Loader2 className="h-4 w-4 animate-spin" />Connecting to {sharerName}’s screen…</span>
