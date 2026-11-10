@@ -130,6 +130,9 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
   /* ---------------- realtime channel ---------------- */
   useEffect(() => {
     let disposed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let reconnectAttempt = 0;
+    let activeChannel: RealtimeChannel | null = null;
     syncClock();
     const clockTimer = setInterval(syncClock, 5 * 60_000);
     loadChat();
@@ -140,71 +143,90 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
       if (session) supabase.realtime.setAuth(session.access_token);
       if (disposed) return;
 
-      const ch = supabase.channel(`room:${roomId}`, { config: { private: true, presence: { key: me }, broadcast: { self: false, ack: false } } });
-      channelRef.current = ch;
+      const createChannel = () => {
+        if (disposed) return;
+        const ch = supabase.channel(`room:${roomId}`, { config: { private: true, presence: { key: me }, broadcast: { self: false, ack: false } } });
+        activeChannel = ch;
+        channelRef.current = ch;
 
-      ch.on('presence', { event: 'sync' }, () => {
-        const raw = ch.presenceState<PresenceInfo>();
-        const next: Record<string, PresenceInfo> = {};
-        for (const [key, metas] of Object.entries(raw)) if (metas[0]) next[key] = metas[0];
-        setPresence(next);
-      })
-        .on('broadcast', { event: 'sync' }, ({ payload }) => {
-          const sender = membersRef.current.find((m) => m.user_id === payload.from);
-          if (!sender || !canControl(sender.role, roomRef.current.everyone_can_control)) return;
-          sync.applyRemote({ ...(payload.state as PlaybackState), origin: 'broadcast' });
+        ch.on('presence', { event: 'sync' }, () => {
+          const raw = ch.presenceState<PresenceInfo>();
+          const next: Record<string, PresenceInfo> = {};
+          for (const [key, metas] of Object.entries(raw)) if (metas[0]) next[key] = metas[0];
+          setPresence(next);
         })
-        .on('broadcast', { event: 'typing' }, ({ payload }) => {
-          setTyping((t) => ({ ...t, [payload.from]: { name: payload.name, at: Date.now() } }));
-        })
-        .on('broadcast', { event: 'reaction' }, ({ payload }) => spawnReaction(payload.emoji))
-        .on('broadcast', { event: 'members' }, () => loadMembers())
-        .on('broadcast', { event: 'kick' }, ({ payload }) => {
-          if (payload.user === me) { toast(payload.ban ? 'You were banned from this room.' : 'A moderator removed you from this room.', 'error'); router.replace('/'); }
-          else loadMembers();
-        })
-        .on('broadcast', { event: 'unreact' }, ({ payload }) => {
-          setReactions((r) => r.filter((x) => !(x.message_id === payload.message_id && x.user_id === payload.user_id && x.emoji === payload.emoji)));
-        })
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, ({ new: r }) => {
-          setRoom(r as Room);
-          sync.applyRemote(stateFromRoom(r as Room, 'db'));
-        })
-        .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, () => {
-          toast('The host closed this room.', 'info'); router.replace('/');
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members', filter: `room_id=eq.${roomId}` }, () => loadMembers())
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${roomId}` }, ({ new: m }) => {
-          const msg = m as Message;
-          setMessages((list) => (list.some((x) => x.id === msg.id) ? list : [...list, msg].slice(-300)));
-          setTyping((t) => { const n = { ...t }; delete n[msg.user_id]; return n; });
-          ensureProfile(msg.user_id);
-          if (msg.user_id !== me && !sheetRef.current && window.innerWidth < 1024) setUnread((u) => u + 1);
-        })
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `room_id=eq.${roomId}` }, ({ new: m }) => {
-          setMessages((list) => list.map((x) => (x.id === (m as Message).id ? (m as Message) : x)));
-        })
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reactions', filter: `room_id=eq.${roomId}` }, ({ new: r }) => {
-          const rx = r as Reaction;
-          setReactions((list) => (list.some((x) => x.message_id === rx.message_id && x.user_id === rx.user_id && x.emoji === rx.emoji) ? list : [...list, rx]));
-        })
-        .subscribe(async (s) => {
-          if (s === 'SUBSCRIBED') {
-            setStatus('live');
-            await ch.track(presencePayload(false));
-            if (wasDisconnected.current) {
-              wasDisconnected.current = false;
-              toast('Reconnected. Catching up…', 'success');
-              loadRoom(); loadMembers(); loadChat(); syncClock();
+          .on('broadcast', { event: 'sync' }, ({ payload }) => {
+            const sender = membersRef.current.find((m) => m.user_id === payload.from);
+            if (!sender || !canControl(sender.role, roomRef.current.everyone_can_control)) return;
+            sync.applyRemote({ ...(payload.state as PlaybackState), origin: 'broadcast' });
+          })
+          .on('broadcast', { event: 'typing' }, ({ payload }) => {
+            setTyping((t) => ({ ...t, [payload.from]: { name: payload.name, at: Date.now() } }));
+          })
+          .on('broadcast', { event: 'reaction' }, ({ payload }) => spawnReaction(payload.emoji))
+          .on('broadcast', { event: 'members' }, () => loadMembers())
+          .on('broadcast', { event: 'kick' }, ({ payload }) => {
+            if (payload.user === me) { toast(payload.ban ? 'You were banned from this room.' : 'A moderator removed you from this room.', 'error'); router.replace('/'); }
+            else loadMembers();
+          })
+          .on('broadcast', { event: 'unreact' }, ({ payload }) => {
+            setReactions((r) => r.filter((x) => !(x.message_id === payload.message_id && x.user_id === payload.user_id && x.emoji === payload.emoji)));
+          })
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, ({ new: r }) => {
+            setRoom(r as Room);
+            sync.applyRemote(stateFromRoom(r as Room, 'db'));
+          })
+          .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, () => {
+            toast('The host closed this room.', 'info'); router.replace('/');
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members', filter: `room_id=eq.${roomId}` }, () => loadMembers())
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${roomId}` }, ({ new: m }) => {
+            const msg = m as Message;
+            setMessages((list) => (list.some((x) => x.id === msg.id) ? list : [...list, msg].slice(-300)));
+            setTyping((t) => { const n = { ...t }; delete n[msg.user_id]; return n; });
+            ensureProfile(msg.user_id);
+            if (msg.user_id !== me && !sheetRef.current && window.innerWidth < 1024) setUnread((u) => u + 1);
+          })
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `room_id=eq.${roomId}` }, ({ new: m }) => {
+            setMessages((list) => list.map((x) => (x.id === (m as Message).id ? (m as Message) : x)));
+          })
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reactions', filter: `room_id=eq.${roomId}` }, ({ new: r }) => {
+            const rx = r as Reaction;
+            setReactions((list) => (list.some((x) => x.message_id === rx.message_id && x.user_id === rx.user_id && x.emoji === rx.emoji) ? list : [...list, rx]));
+          })
+          .subscribe(async (s) => {
+            if (s === 'SUBSCRIBED') {
+              if (reconnectTimer) clearTimeout(reconnectTimer);
+              reconnectTimer = undefined;
+              reconnectAttempt = 0;
+              setStatus('live');
+              await ch.track(presencePayload(false));
+              if (wasDisconnected.current) {
+                wasDisconnected.current = false;
+                toast('Reconnected. Catching up…', 'success');
+                loadRoom(); loadMembers(); loadChat(); syncClock();
+              }
+            } else if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT' || s === 'CLOSED') {
+              if (!disposed) {
+                wasDisconnected.current = true;
+                setStatus(navigator.onLine ? 'reconnecting' : 'offline');
+                if (s === 'CLOSED' && activeChannel === ch) {
+                  if (reconnectTimer) clearTimeout(reconnectTimer);
+                  const delay = Math.min(1000 * 2 ** reconnectAttempt++, 30_000);
+                  reconnectTimer = setTimeout(() => {
+                    if (!disposed && activeChannel === ch) createChannel();
+                  }, delay);
+                }
+              }
             }
-          } else if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT' || s === 'CLOSED') {
-            if (!disposed) { wasDisconnected.current = true; setStatus(navigator.onLine ? 'reconnecting' : 'offline'); }
-          }
-        });
+          });
+      };
+
+      createChannel();
     })();
 
     const onOffline = () => { wasDisconnected.current = true; setStatus('offline'); };
-    const onOnline = () => setStatus('reconnecting');
+    const onOnline = () => { wasDisconnected.current = true; setStatus('reconnecting'); };
     window.addEventListener('offline', onOffline);
     window.addEventListener('online', onOnline);
     const touch = () => { supabase.rpc('touch_presence', { p_room: roomId }).then(() => {}); };
@@ -214,6 +236,7 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
     return () => {
       disposed = true;
       clearInterval(clockTimer); clearInterval(beat);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       window.removeEventListener('offline', onOffline);
       window.removeEventListener('online', onOnline);
       if (channelRef.current) supabase.removeChannel(channelRef.current);
@@ -385,7 +408,9 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
         <Html5Player key={state.source_url} ref={playerRef} src={state.source_url} hls={state.source_type === 'hls'}
           onReady={onReady} onPlay={sync.onLocalChange} onPause={sync.onLocalChange} onSeek={sync.onLocalChange} onBuffering={sync.setBuffering} />
       )}
-      {state.source_type === 'iframe' && state.source_url && <IframeEmbed key={state.source_url} url={state.source_url} />}
+      {state.source_type === 'iframe' && state.source_url && (
+        <IframeEmbed key={state.source_url} url={state.source_url} onCountdown={controlling ? () => sync.startCountdown(5) : undefined} />
+      )}
       {state.source_type === 'netflix' && state.source_url && <NetflixPanel url={state.source_url} />}
 
       {/* floating emoji */}

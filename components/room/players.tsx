@@ -32,7 +32,6 @@ export interface PlayerEvents {
 /* ------------------------------------------------------------------ */
 /* YouTube IFrame Player API                                           */
 /* ------------------------------------------------------------------ */
-/* eslint-disable @typescript-eslint/no-explicit-any */
 let ytApi: Promise<any> | null = null;
 function loadYouTubeApi(): Promise<any> {
   if (typeof window === 'undefined') return Promise.reject();
@@ -137,8 +136,6 @@ export const YouTubePlayer = forwardRef<PlayerHandle, { videoId: string } & Play
     </div>
   );
 });
-/* eslint-enable @typescript-eslint/no-explicit-any */
-
 /* ------------------------------------------------------------------ */
 /* HTML5 video (MP4/WebM/Ogg) and HLS via hls.js                       */
 /* ------------------------------------------------------------------ */
@@ -231,7 +228,7 @@ export const Html5Player = forwardRef<PlayerHandle, { src: string; hls: boolean 
 /* ------------------------------------------------------------------ */
 /* Third-party embeds (only when the site allows framing)              */
 /* ------------------------------------------------------------------ */
-export function IframeEmbed({ url }: { url: string }) {
+export function IframeEmbed({ url, onCountdown }: { url: string; onCountdown?: () => void }) {
   const [check, setCheck] = useState<{ loading: boolean; embeddable?: boolean; reason?: string }>({ loading: true });
   useEffect(() => {
     let alive = true;
@@ -251,9 +248,13 @@ export function IframeEmbed({ url }: { url: string }) {
         <AlertTriangle className="h-8 w-8 text-beam" />
         <div>
           <p className="font-semibold">{host} can’t be shown inside Nightcap</p>
-          <p className="mt-1 max-w-md text-sm text-white/60">{check.reason} Open it in a new tab and use the room countdown to press play together.</p>
+          <p className="mt-1 max-w-md text-sm text-white/60">
+            {check.reason} If the site blocks framing, Nightcap can’t override that; everyone needs to open it separately.
+            Use the room countdown to start together.
+          </p>
         </div>
         <a href={url} target="_blank" rel="noopener noreferrer" className="btn-primary"><ExternalLink className="h-4 w-4" />Open {host}</a>
+        {onCountdown && <button type="button" onClick={onCountdown} className="btn-ghost">Start 5-second room countdown</button>}
       </div>
     );
   }

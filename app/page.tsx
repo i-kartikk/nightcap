@@ -52,7 +52,7 @@ export default async function Home() {
   const { data: live } = await supabase
     .from('rooms').select('*').eq('is_public', true).order('last_activity', { ascending: false }).limit(6);
 
-  const showcase = recent.length ? recent : ((live ?? []) as Room[]);
+  const showcase: (Room & { last_active?: string })[] = recent.length ? recent : ((live ?? []) as Room[]);
 
   return (
     <>

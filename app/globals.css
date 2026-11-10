@@ -43,7 +43,7 @@ body {
   }
   .btn-primary:hover { filter: brightness(1.06); }
   .btn-violet { @apply btn bg-violet text-white hover:bg-violet/90; box-shadow: 0 10px 30px -12px rgba(156,107,255,.7); }
-  .btn-ghost { @apply btn border border-white/12 bg-white/[0.04] text-white hover:bg-white/[0.09]; }
+  .btn-ghost { @apply btn border border-white/[0.12] bg-white/[0.04] text-white hover:bg-white/[0.09]; }
   .btn-danger { @apply btn bg-rose-500/90 text-white hover:bg-rose-500; }
   .icon-btn {
     @apply inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.05]
