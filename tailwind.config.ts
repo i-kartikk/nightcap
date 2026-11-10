@@ -4,6 +4,7 @@ const config: Config = {
   content: ['./app/**/*.{ts,tsx}', './components/**/*.{ts,tsx}', './hooks/**/*.{ts,tsx}'],
   theme: {
     extend: {
+      opacity: {12: '0.12'},
       colors: {
         ink: '#07060C',
         coal: '#15121D',
