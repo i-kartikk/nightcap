@@ -414,6 +414,9 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
       )}
       {state.source_type === 'netflix' && state.source_url && <NetflixPanel url={state.source_url} />}
 
+      {/* a shared screen from the call is shown here, over the player */}
+      <div id="nightcap-screen-stage" className="pointer-events-none absolute inset-0 z-10 empty:hidden" />
+
       {/* floating emoji */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         {floating.map((f) => <span key={f.id} className="absolute bottom-6 animate-floatUp text-4xl" style={{ left: `${f.x}%` }}>{f.emoji}</span>)}
