@@ -86,6 +86,8 @@ export interface PresenceInfo {
   avatar_url: string | null;
   watching: boolean;
   in_call: boolean;
+  /** True while this person is sharing their screen. */
+  sharing?: boolean;
   online_at: string;
 }
 
