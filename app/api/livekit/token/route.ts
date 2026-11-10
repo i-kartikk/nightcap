@@ -6,7 +6,11 @@ import { rateLimit } from '@/lib/ratelimit';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
-  const room = new URL(req.url).searchParams.get('room')?.toUpperCase() ?? '';
+  const params = new URL(req.url).searchParams;
+  const room = params.get('room')?.toUpperCase() ?? '';
+  // kind: none = voice/video call; 'screen' = sharing a screen; 'view' = watching a share.
+  const kindParam = params.get('kind');
+  const kind = kindParam === 'screen' || kindParam === 'view' ? kindParam : null;
   if (!/^[A-Z0-9]{8}$/.test(room)) return NextResponse.json({ error: 'Invalid room' }, { status: 400 });
 
   const supabase = createClient();
@@ -32,15 +36,16 @@ export async function GET(req: Request) {
   }
 
   const at = new AccessToken(key, secret, {
-    identity: user.id,
+    // Screen-share connections get their own identity so they never kick the person out of the call.
+    identity: kind ? `${user.id}:${kind}` : user.id,
     name: profile?.display_name || profile?.username || 'Guest',
     metadata: JSON.stringify({ avatar_url: profile?.avatar_url ?? null, username: profile?.username }),
     ttl: '4h',
   });
   at.addGrant({
-    room: `nightcap-${room}`,
+    room: kind ? `nightcap-${room}-screen` : `nightcap-${room}`,
     roomJoin: true,
-    canPublish: true,
+    canPublish: kind !== 'view',
     canSubscribe: true,
     canPublishData: true,
   });
