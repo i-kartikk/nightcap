@@ -18,6 +18,7 @@ import { ChatPanel, QUICK_EMOJI } from './ChatPanel';
 import { ParticipantsPanel, ParticipantStrip, type MemberActions } from './ParticipantsPanel';
 import { SourcePicker } from './SourcePicker';
 import { InviteModal, RoomSettingsModal, ReportModal } from './modals';
+import { useScreenShare, ShareScreenButton, SharingNotice, ScreenViewer } from './ScreenShare';
 import { useToast } from '../Toast';
 import { useAuth } from '../AuthProvider';
 import { parseYouTubeId, sourceLabel, isSyncable } from '@/lib/video';
@@ -59,6 +60,7 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
   const [unread, setUnread] = useState(0);
   const [qualities, setQualities] = useState<{ id: number; label: string }[]>([]);
   const [, forceTick] = useState(0);
+  const screen = useScreenShare(initialRoom.id, (m) => toast(m, 'error'));
 
   const channelRef = useRef<RealtimeChannel | null>(null);
   const playerRef = useRef<PlayerHandle>(null);
@@ -248,7 +250,7 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
   function presencePayload(inCall: boolean): PresenceInfo {
     return {
       user_id: me, username: profile?.display_name || profile?.username || 'Someone', avatar_url: profile?.avatar_url ?? null,
-      watching: document.visibilityState === 'visible', in_call: inCall, online_at: new Date().toISOString(),
+      watching: document.visibilityState === 'visible', in_call: inCall, sharing: screen.sharing, online_at: new Date().toISOString(),
     };
   }
 
@@ -258,7 +260,10 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
     update();
     document.addEventListener('visibilitychange', update);
     return () => document.removeEventListener('visibilitychange', update);
-  }, [call, status]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [call, status, screen.sharing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Who (if anyone else) is sharing their screen right now.
+  const sharer = Object.values(presence).find((p) => p.sharing && p.user_id !== me) ?? null;
 
   // Expire typing indicators; refresh countdown display.
   useEffect(() => {
@@ -414,8 +419,9 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
       )}
       {state.source_type === 'netflix' && state.source_url && <NetflixPanel url={state.source_url} />}
 
-      {/* a shared screen from the call is shown here, over the player */}
-      <div id="nightcap-screen-stage" className="pointer-events-none absolute inset-0 z-10 empty:hidden" />
+      {/* screen sharing: viewers see the shared screen here; the sharer sees a notice */}
+      {screen.sharing ? <SharingNotice onStop={screen.stop} />
+        : sharer ? <ScreenViewer key={sharer.user_id} roomId={roomId} sharerName={sharer.username} /> : null}
 
       {/* floating emoji */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -497,6 +503,8 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
             <div className="flex flex-wrap items-center gap-2">
               {controlling && <button className="btn-ghost px-3.5 py-2" onClick={() => setPicker(true)}><Clapperboard className="h-4 w-4" />Change video</button>}
               {controlling && state.source_type !== 'none' && <button className="btn-ghost px-3.5 py-2" onClick={() => sync.startCountdown(5)}><Timer className="h-4 w-4" />Countdown</button>}
+              <ShareScreenButton sharing={screen.sharing} starting={screen.starting} otherSharer={sharer?.username ?? null}
+                onStart={screen.start} onStop={screen.stop} />
               {!call ? (
                 <>
                   <button className="btn-ghost px-3.5 py-2" onClick={() => setCall({ video: false })}><Phone className="h-4 w-4" />Voice</button>
