@@ -71,6 +71,9 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
   const historyLogged = useRef<string | null>(null);
   const sheetRef = useRef(sheet);
   sheetRef.current = sheet;
+  const sideTabRef = useRef(sideTab);
+  sideTabRef.current = sideTab;
+  const [popups, setPopups] = useState<Message[]>([]);
   const deniedAt = useRef(0);
 
   const myRole: RoomRole | null = members.find((m) => m.user_id === me)?.role ?? null;
@@ -188,6 +191,12 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
             setTyping((t) => { const n = { ...t }; delete n[msg.user_id]; return n; });
             ensureProfile(msg.user_id);
             if (msg.user_id !== me && !sheetRef.current && window.innerWidth < 1024) setUnread((u) => u + 1);
+          // Pop up new messages whenever the chat isn't on screen (including full screen).
+          const chatVisible = !document.fullscreenElement && (window.innerWidth >= 1024 ? sideTabRef.current === 'chat' : sheetRef.current);
+          if (msg.user_id !== me && !chatVisible) {
+            setPopups((p) => [...p.filter((x) => x.id !== msg.id), msg].slice(-3));
+            setTimeout(() => setPopups((p) => p.filter((x) => x.id !== msg.id)), 6000);
+          }
           })
           .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `room_id=eq.${roomId}` }, ({ new: m }) => {
             setMessages((list) => list.map((x) => (x.id === (m as Message).id ? (m as Message) : x)));
@@ -382,8 +391,23 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
   function fullscreen() {
     const el = stageRef.current;
     if (document.fullscreenElement) { document.exitFullscreen(); return; }
-    if (el?.requestFullscreen) el.requestFullscreen().catch(() => playerRef.current?.nativeFullscreen?.());
-    else playerRef.current?.nativeFullscreen?.();
+    // iPhone can only full-screen a <video> itself: prefer the shared screen, else the player.
+    const nativeFs = () => {
+      const sv = el?.querySelector('video[data-screen-share]') as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
+      if (sv?.webkitEnterFullscreen) sv.webkitEnterFullscreen(); else playerRef.current?.nativeFullscreen?.();
+    };
+    if (el?.requestFullscreen) {
+      el.requestFullscreen()
+        // On phones, turn sideways for a bigger picture where the browser allows it.
+        .then(() => (window.screen.orientation as unknown as { lock?: (o: string) => Promise<void> }).lock?.('landscape').catch(() => {}))
+        .catch(nativeFs);
+    } else nativeFs();
+  }
+
+  function openChat() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    if (window.innerWidth < 1024) { setSheet(true); setUnread(0); } else setSideTab('chat');
+    setPopups([]);
   }
 
   const onReady = useCallback(() => {
@@ -422,6 +446,19 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
       {/* screen sharing: viewers see the shared screen here; the sharer sees a notice */}
       {screen.sharing ? <SharingNotice onStop={screen.stop} />
         : sharer ? <ScreenViewer key={sharer.user_id} roomId={roomId} sharerName={sharer.username} /> : null}
+
+      {/* new-message popups; inside the player so they also show in full screen */}
+      <div className="pointer-events-none absolute bottom-3 left-3 z-20 flex w-[min(80%,22rem)] flex-col items-start gap-2">
+        <AnimatePresence>
+          {popups.filter((p) => !blocked.has(p.user_id)).map((p) => (
+            <motion.button key={p.id} layout initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -20 }}
+              onClick={openChat} className="pointer-events-auto max-w-full rounded-2xl bg-black/75 px-3 py-2 text-left shadow-xl backdrop-blur">
+              <span className="block text-xs font-semibold text-lilac">{profiles[p.user_id]?.display_name || profiles[p.user_id]?.username || 'Someone'}</span>
+              <span className="line-clamp-2 break-words text-sm text-white/90">{p.content || 'sent a GIF'}</span>
+            </motion.button>
+          ))}
+        </AnimatePresence>
+      </div>
 
       {/* floating emoji */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -519,7 +556,7 @@ export function RoomClient({ initialRoom, initialMembers, me, initialFavorite }:
                   </select>
                 )}
                 {pipSupported && <button className="icon-btn h-9 w-9" onClick={() => playerRef.current?.pip?.().catch(() => toast('Picture-in-picture isn’t available for this video.', 'error'))} aria-label="Picture in picture"><PictureInPicture2 className="h-4 w-4" /></button>}
-                {state.source_type !== 'none' && <button className="icon-btn h-9 w-9" onClick={fullscreen} aria-label="Full screen"><Maximize className="h-4 w-4" /></button>}
+                {(state.source_type !== 'none' || sharer || screen.sharing) && <button className="icon-btn h-9 w-9" onClick={fullscreen} aria-label="Full screen"><Maximize className="h-4 w-4" /></button>}
               </div>
             </div>
 
