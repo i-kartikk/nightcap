@@ -29,7 +29,8 @@ export function expectedPosition(s: PlaybackState, now = serverNow()) {
 
 const DRIFT_SEEK_FINE = 2.0;   // HTML5: beyond this, hard seek
 const DRIFT_NUDGE = 0.15;      // HTML5: beyond this, adjust rate
-const DRIFT_SEEK_COARSE = 0.9; // YouTube: seek beyond this
+const DRIFT_SEEK_COARSE = 1.5; // YouTube: seek beyond this (its seeks re-buffer, so be patient)
+const COARSE_SEEK_COOLDOWN = 5000; // YouTube: min ms between automatic correction seeks
 const PAUSED_TOLERANCE = 0.35;
 
 interface Options {
@@ -47,7 +48,10 @@ export function useSync({ roomId, initial, controlling, player, broadcast, onErr
   const stateRef = useRef<PlaybackState>(stateFromRoom(initial));
   const [state, setState] = useState<PlaybackState>(stateRef.current);
   const [needsGesture, setNeedsGesture] = useState<null | 'muted' | 'blocked'>(null);
-  const [buffering, setBuffering] = useState(false);
+  const [buffering, setBufferingState] = useState(false);
+  const bufferingRef = useRef(false);
+  const lastCoarseSeek = useRef(0);
+  const setBuffering = useCallback((b: boolean) => { bufferingRef.current = b; setBufferingState(b); }, []);
   const suppressUntil = useRef(0);
   const ready = useRef(false);
   const pushTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -65,6 +69,8 @@ export function useSync({ roomId, initial, controlling, player, broadcast, onErr
     const p = player.current;
     const s = stateRef.current;
     if (!p || !ready.current || !isSyncable(s.source_type)) return;
+    // While the player is loading data, corrective seeks only cause more buffering.
+    if (!hard && bufferingRef.current) return;
     const now = serverNow();
     const exp = expectedPosition(s, now);
     const shouldPlay = s.is_playing && now >= s.updatedAtMs - 40;
@@ -83,7 +89,9 @@ export function useSync({ roomId, initial, controlling, player, broadcast, onErr
       else p.setRate(s.playback_rate);
     } else {
       p.setRate(s.playback_rate);
-      if (Math.abs(drift) > (hard ? 0.5 : DRIFT_SEEK_COARSE)) { suppress(1200); p.seek(exp + 0.2); }
+      const nowMs = performance.now();
+      const canSeek = hard || nowMs - lastCoarseSeek.current > COARSE_SEEK_COOLDOWN;
+      if (canSeek && Math.abs(drift) > (hard ? 0.5 : DRIFT_SEEK_COARSE)) { lastCoarseSeek.current = nowMs; suppress(1200); p.seek(exp + 0.2); }
     }
 
     if (p.isPaused() && gestureRef.current !== 'blocked') {
@@ -99,10 +107,16 @@ export function useSync({ roomId, initial, controlling, player, broadcast, onErr
     if (incoming.version < cur.version) return;
     if (incoming.version === cur.version && !(incoming.origin === 'db' && cur.origin !== 'db')) return;
     const sourceChanged = incoming.source_url !== cur.source_url || incoming.source_type !== cur.source_type;
+    // Only snap hard when something meaningful changed. The database echo of our own
+    // change differs by a few ms; snapping on it makes the host's video stutter.
+    const meaningful = incoming.is_playing !== cur.is_playing
+      || incoming.playback_rate !== cur.playback_rate
+      || incoming.countdownAtMs !== cur.countdownAtMs
+      || Math.abs(expectedPosition(incoming) - expectedPosition(cur)) > 1;
     stateRef.current = incoming;
     setState(incoming);
     if (sourceChanged) { ready.current = false; return; } // new player mounts and calls onReady
-    enforce(true);
+    enforce(meaningful);
   }, [enforce]);
 
   const commit = useCallback(async (next: PlaybackState, sourceChanged: boolean) => {
